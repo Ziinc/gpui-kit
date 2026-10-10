@@ -1,9 +1,18 @@
-use std::{ops::Deref, rc::Rc};
+extern crate gpui_kit as gpui;
 
-use wry::{
-    Rect,
-    dpi::{self, LogicalSize},
-};
+#[cfg(target_os = "macos")]
+mod composition;
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "macos")]
+use composition::NativeWebViewSurface;
+#[cfg(target_os = "linux")]
+use linux::NativeWebViewSurface;
+
+use std::{cell::Cell, ops::Deref, rc::Rc};
+
+use wry::Rect;
 
 use gpui::{
     App, Bounds, ContentMask, DismissEvent, Element, ElementId, Entity, EventEmitter, FocusHandle,
@@ -32,45 +41,142 @@ impl WebViewHandle {
 pub struct WebView {
     focus_handle: FocusHandle,
     webview: Rc<wry::WebView>,
-    visible: bool,
+    visible: Cell<bool>,
     bounds: Bounds<Pixels>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    composition: Option<NativeWebViewSurface>,
+    /// The GPUI scale factor the page zoom was last matched to.
+    #[cfg(target_os = "linux")]
+    scale_factor: Cell<f32>,
+    /// The window-relative origin that page clicks are forwarded to GPUI from.
+    #[cfg(target_os = "linux")]
+    origin: Rc<Cell<gpui::Point<Pixels>>>,
 }
 
 impl Drop for WebView {
     fn drop(&mut self) {
         self.hide();
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(surface) = self.composition.take() {
+            surface.release(self.webview.clone());
+        }
     }
 }
 
 impl WebView {
     /// Create a new WebView from a wry WebView.
-    pub fn new(webview: wry::WebView, _: &mut Window, cx: &mut App) -> Self {
+    pub fn new(webview: wry::WebView, window: &mut Window, cx: &mut App) -> Self {
         let _ = webview.set_bounds(Rect::default());
+
+        #[cfg(target_os = "macos")]
+        let composition = match NativeWebViewSurface::new(&webview, window, cx) {
+            Ok(surface) => Some(surface),
+            Err(error) => {
+                log::warn!("WebView composition unavailable: {error:#}");
+                None
+            }
+        };
+        #[cfg(target_os = "linux")]
+        let origin = Rc::new(Cell::new(gpui::Point::default()));
+        #[cfg(target_os = "linux")]
+        linux::forward_mouse_down(&webview, origin.clone(), window, cx);
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let _ = window;
 
         Self {
             focus_handle: cx.focus_handle(),
-            visible: true,
+            visible: Cell::new(true),
             bounds: Bounds::default(),
             webview: Rc::new(webview),
+            #[cfg(target_os = "macos")]
+            composition,
+            #[cfg(target_os = "linux")]
+            composition: None,
+            #[cfg(target_os = "linux")]
+            scale_factor: Cell::new(0.),
+            #[cfg(target_os = "linux")]
+            origin,
         }
+    }
+
+    /// Build a webview as a child of `window`, performing the platform setup Wry requires.
+    ///
+    /// On Linux the window must run on X11 or XWayland: start the application with
+    /// `gpui_kit::platform::linux(WindowingModes::X11)`. A Wayland window returns an error.
+    /// This also initializes GTK and drives its main loop from GPUI. The webview is built in a
+    /// window composition surface so GPUI overlays can render above it.
+    pub fn build(
+        builder: wry::WebViewBuilder,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> wry::Result<Self> {
+        #[cfg(target_os = "linux")]
+        let webview = {
+            let parent = linux::X11Parent::new(window)?;
+            linux::ensure_gtk(cx)?;
+
+            match NativeWebViewSurface::new(window, cx) {
+                Ok(surface) => {
+                    let webview = builder.build_as_child(&surface.parent()?)?;
+                    let mut this = Self::new(webview, window, cx);
+                    this.composition = Some(surface);
+                    return Ok(this);
+                }
+                Err(error) => log::warn!("WebView composition unavailable: {error:#}"),
+            }
+
+            builder.build_as_child(&parent)?
+        };
+        #[cfg(not(target_os = "linux"))]
+        let webview = builder.build_as_child(&*window)?;
+
+        Ok(Self::new(webview, window, cx))
+    }
+
+    /// Set window-relative bounds, including offscreen loading bounds.
+    /// With window composition, position the managed container and its child together.
+    pub fn set_bounds(&self, bounds: Rect) -> wry::Result<()> {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(surface) = &self.composition {
+            return surface
+                .set_bounds(&self.webview, bounds)
+                .map_err(|error| wry::Error::Io(std::io::Error::other(error)));
+        }
+        self.webview.set_bounds(bounds)
+    }
+
+    /// Set visibility and report native errors without discarding the loaded page.
+    pub fn set_visible(&self, visible: bool) -> wry::Result<()> {
+        // A focus error must not leave a closing native view covering the window.
+        let focus_result = if !visible && self.visible.get() {
+            self.webview.focus_parent()
+        } else {
+            Ok(())
+        };
+        self.webview.set_visible(visible)?;
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(surface) = &self.composition {
+            surface
+                .set_visible(visible)
+                .map_err(|error| wry::Error::Io(std::io::Error::other(error)))?;
+        }
+        self.visible.set(visible);
+        focus_result
     }
 
     /// Show the webview.
     pub fn show(&mut self) {
-        let _ = self.webview.set_visible(true);
-        self.visible = true;
+        let _ = self.set_visible(true);
     }
 
     /// Hide the webview.
     pub fn hide(&mut self) {
-        _ = self.webview.focus_parent();
-        _ = self.webview.set_visible(false);
-        self.visible = false;
+        let _ = self.set_visible(false);
     }
 
     /// Get whether the webview is visible.
     pub fn visible(&self) -> bool {
-        self.visible
+        self.visible.get()
     }
 
     /// Get the current bounds of the webview.
@@ -81,6 +187,11 @@ impl WebView {
     /// Go back in the webview history.
     pub fn back(&mut self) -> anyhow::Result<()> {
         Ok(self.webview.evaluate_script("history.back();")?)
+    }
+
+    /// Go forward in the webview history.
+    pub fn forward(&mut self) -> anyhow::Result<()> {
+        Ok(self.webview.evaluate_script("history.forward();")?)
     }
 
     /// Load a URL in the webview.
@@ -208,19 +319,36 @@ impl Element for WebViewElement {
             return None;
         }
 
-        let _ = self.view.set_bounds(Rect {
-            size: dpi::Size::Logical(LogicalSize {
-                width: bounds.size.width.into(),
-                height: bounds.size.height.into(),
-            }),
-            position: dpi::Position::Logical(dpi::LogicalPosition::new(
-                bounds.origin.x.into(),
-                bounds.origin.y.into(),
-            )),
-        });
+        let parent = self.parent.read(cx);
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(surface) = &parent.composition {
+            surface.set_scale_factor(window.scale_factor());
+        }
+        #[cfg(target_os = "linux")]
+        if parent.scale_factor.replace(window.scale_factor()) != window.scale_factor() {
+            linux::match_scale_factor(&parent.webview, window.scale_factor());
+        }
+        #[cfg(target_os = "linux")]
+        parent.origin.set(bounds.origin);
+        #[cfg(target_os = "linux")]
+        let rect = linux::device_bounds(bounds, window.scale_factor());
+        #[cfg(not(target_os = "linux"))]
+        let rect = Rect {
+            size: wry::dpi::LogicalSize::new(
+                f64::from(bounds.size.width),
+                f64::from(bounds.size.height),
+            )
+            .into(),
+            position: wry::dpi::LogicalPosition::new(
+                f64::from(bounds.origin.x),
+                f64::from(bounds.origin.y),
+            )
+            .into(),
+        };
+        let _ = parent.set_bounds(rect);
 
-        // Create a hitbox to handle mouse event
-        Some(window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal))
+        // The native view covers this area, so GPUI content below it must not receive input.
+        Some(window.insert_hitbox(bounds, gpui::HitboxBehavior::BlockMouse))
     }
 
     fn paint(
