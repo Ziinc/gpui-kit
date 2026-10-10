@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AccessibleAction, AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla,
+    AccessibleAction, AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Global, Hsla,
     InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role,
     SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, TouchPhase,
     Window, div, px, relative,
@@ -23,6 +23,28 @@ use rust_i18n::t;
 use super::state::{TextInputState, sync_focused_input_registry};
 use super::{InputContentType, InputState, sync_native_content_type};
 use crate::ThemeStyled as _;
+
+/// Set when the platform draws the touch selection UI of a focused input.
+#[derive(Default)]
+struct NativeTouchSelection(bool);
+impl Global for NativeTouchSelection {}
+
+/// Let the platform draw the touch selection UI of a focused [`Input`]: the
+/// selection handles and the edit menu a long press leaves behind.
+///
+/// Use it on a host that already shows its own text UI over the window, such
+/// as Android's floating toolbar and drag handles. The long press still
+/// selects a word; the platform follows that selection and drives it back
+/// through the window's input handler. Selections in plain text, outside an
+/// input, keep the handles and menu drawn here.
+pub fn set_native_touch_selection(enabled: bool, cx: &mut App) {
+    cx.set_global(NativeTouchSelection(enabled));
+}
+
+fn is_native_touch_selection(cx: &App) -> bool {
+    cx.try_global::<NativeTouchSelection>()
+        .is_some_and(|native| native.0)
+}
 
 fn accessibility_role(
     is_multi_line: bool,
@@ -399,7 +421,8 @@ impl Input {
         self
     }
 
-    /// The handles and the edit menu of the selection a long press made.
+    /// The handles and the edit menu of the selection a long press made, unless
+    /// the platform draws them; see [`set_native_touch_selection`].
     ///
     /// The menu offers what the native context menu would: Cut, Copy, Paste
     /// and Select All, leaving out what cannot apply right now rather than
@@ -410,7 +433,7 @@ impl Input {
         window: &Window,
         cx: &App,
     ) -> Vec<AnyElement> {
-        if state.touch_selection(cx).is_none() {
+        if is_native_touch_selection(cx) || state.touch_selection(cx).is_none() {
             return Vec::new();
         }
         let capabilities = state.context_menu_capabilities(cx);
