@@ -30,11 +30,14 @@ pub(super) fn init(cx: &mut App) {
 }
 
 pub(super) struct TableOptions {
+    pub(super) scroll_bounce: Option<bool>,
     pub(super) scrollbar_visible: Edges<bool>,
     /// Set stripe style of the table.
     pub(super) stripe: bool,
     /// Set to use border style of the table.
     pub(super) bordered: bool,
+    /// Draw the border on the right edge of the fixed columns.
+    pub(super) fixed_cols_border: bool,
     /// The cell size of the table.
     pub(super) size: Size,
     /// Height of each header row. `None` uses [`Size::table_row_height`].
@@ -44,9 +47,11 @@ pub(super) struct TableOptions {
 impl Default for TableOptions {
     fn default() -> Self {
         Self {
+            scroll_bounce: None,
             scrollbar_visible: Edges::all(true),
             stripe: false,
             bordered: true,
+            fixed_cols_border: true,
             size: Size::default(),
             header_row_height: None,
         }
@@ -114,6 +119,14 @@ where
         self
     }
 
+    /// Bounce the rows at the vertical boundaries, keeping headers and
+    /// scrollbars fixed. On by default on iOS,
+    /// Android and macOS, off elsewhere.
+    pub fn scroll_bounce(mut self, enabled: bool) -> Self {
+        self.options.scroll_bounce = Some(enabled);
+        self
+    }
+
     /// Set to use border style of the table, default to true.
     pub fn bordered(mut self, bordered: bool) -> Self {
         self.options.bordered = bordered;
@@ -128,6 +141,16 @@ where
     /// same height.
     pub fn header_row_height(mut self, height: impl Into<Pixels>) -> Self {
         self.options.header_row_height = Some(height.into());
+        self
+    }
+
+    /// Set whether to draw the border on the right edge of the fixed columns,
+    /// default to true.
+    ///
+    /// Turn it off when the fixed cells draw that edge themselves, so the
+    /// boundary is not drawn twice.
+    pub fn fixed_cols_border(mut self, fixed_cols_border: bool) -> Self {
+        self.options.fixed_cols_border = fixed_cols_border;
         self
     }
 
