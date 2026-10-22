@@ -71,6 +71,24 @@ cx.subscribe(&input, |this, state, event: &InputEvent, cx| {
 });
 ```
 
+## Caret blinking
+
+A focused input blinks its caret every 500 ms, and every blink repaints the
+window. Install `CursorBlinkDefaults` to change the interval for the whole
+application, or pass `None` for a steady caret:
+
+```rust
+use std::time::Duration;
+use gpui_kit::base::input::CursorBlinkDefaults;
+
+CursorBlinkDefaults::new()
+    .with_interval(Duration::from_millis(800))
+    .install(cx);
+```
+
+Inputs read it on every blink, so the change applies to inputs that are
+already focused.
+
 ## Presentation
 
 `gpui-base` does not install product styling. Supply `InputEditorStyle` to the
