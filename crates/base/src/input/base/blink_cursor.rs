@@ -1,4 +1,4 @@
-use gpui::{Context, Pixels, Task, px};
+use gpui::{App, Context, Global, Pixels, Task, px};
 use instant::Duration;
 
 static INTERVAL: Duration = Duration::from_millis(500);
@@ -6,9 +6,59 @@ static PAUSE_DELAY: Duration = Duration::from_millis(300);
 
 pub(super) const CURSOR_WIDTH: Pixels = px(1.);
 
+/// Application-wide caret blinking for text inputs.
+///
+/// Every blink repaints the window, so a slower blink, or none, saves work
+/// when frames are costly, such as under software rendering. Read on every
+/// blink, so installing new defaults takes effect in inputs that are already
+/// focused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CursorBlinkDefaults {
+    interval: Option<Duration>,
+}
+
+impl Global for CursorBlinkDefaults {}
+
+impl CursorBlinkDefaults {
+    /// Creates the Base defaults: the caret shows and hides every 500 ms.
+    pub fn new() -> Self {
+        Self {
+            interval: Some(INTERVAL),
+        }
+    }
+
+    /// Sets how long the caret stays shown, then hidden. `None` keeps it
+    /// shown without blinking.
+    pub fn with_interval(mut self, interval: impl Into<Option<Duration>>) -> Self {
+        self.interval = interval.into();
+        self
+    }
+
+    /// How long the caret stays shown, then hidden; `None` when it does not blink.
+    pub fn interval(&self) -> Option<Duration> {
+        self.interval
+    }
+
+    /// Installs these defaults for the whole application.
+    pub fn install(self, cx: &mut App) {
+        cx.set_global(self);
+    }
+
+    /// Returns the installed defaults, or the Base ones when none were.
+    pub fn global(cx: &App) -> Self {
+        cx.try_global::<Self>().copied().unwrap_or_default()
+    }
+}
+
+impl Default for CursorBlinkDefaults {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// To manage the Input cursor blinking.
 ///
-/// It will start blinking with a interval of 500ms.
+/// It will start blinking with the interval of [`CursorBlinkDefaults`].
 /// Every loop will notify the view to update the `visible`, and Input will observe this update to touch repaint.
 ///
 /// The input painter will check if this in visible state, then it will draw the cursor.
@@ -69,13 +119,20 @@ impl BlinkCursor {
             return;
         }
 
+        let Some(interval) = CursorBlinkDefaults::global(cx).interval() else {
+            // Not blinking: a steady caret, and no timer to repaint it.
+            self.visible = true;
+            cx.notify();
+            return;
+        };
+
         self.visible = !self.visible;
         cx.notify();
 
         // Schedule the next blink
         let epoch = self.next_epoch();
         self._task = cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(INTERVAL).await;
+            cx.background_executor().timer(interval).await;
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| this.blink(epoch, cx));
             }
@@ -148,6 +205,51 @@ mod tests {
         cx.executor().advance_clock(INTERVAL);
         cx.run_until_parked();
         assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+    }
+
+    #[gpui::test]
+    fn the_installed_interval_paces_the_blink(cx: &mut TestAppContext) {
+        let interval = Duration::from_secs(1);
+        cx.update(|cx| {
+            CursorBlinkDefaults::new()
+                .with_interval(interval)
+                .install(cx)
+        });
+        let cursor = cx.new(|_| BlinkCursor::new());
+        cursor.update(cx, |cursor, cx| cursor.start(cx));
+        cx.run_until_parked();
+        cx.executor()
+            .advance_clock(interval - Duration::from_millis(1));
+        cx.run_until_parked();
+        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        cx.executor().advance_clock(Duration::from_millis(1));
+        cx.run_until_parked();
+        assert!(!cursor.read_with(cx, |cursor, _| cursor.visible()));
+    }
+
+    #[gpui::test]
+    fn without_an_interval_the_cursor_stays_visible_and_idle(cx: &mut TestAppContext) {
+        cx.update(|cx| CursorBlinkDefaults::new().with_interval(None).install(cx));
+        let cursor = cx.new(|_| BlinkCursor::new());
+        cursor.update(cx, |cursor, cx| cursor.start(cx));
+        cx.run_until_parked();
+        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+
+        let notifies = Rc::new(Cell::new(0usize));
+        let counter = notifies.clone();
+        let _observer =
+            cx.update(|cx| cx.observe(&cursor, move |_, _| counter.set(counter.get() + 1)));
+        cx.run_until_parked();
+        // Typing pauses and resumes the cursor; it must not start blinking.
+        cursor.update(cx, |cursor, cx| cursor.pause(cx));
+        cx.executor().advance_clock(INTERVAL * 6);
+        cx.run_until_parked();
+
+        assert!(cursor.read_with(cx, |cursor, _| cursor.visible()));
+        assert!(
+            notifies.get() <= 2,
+            "a cursor without an interval kept blinking"
+        );
     }
 
     #[gpui::test]
