@@ -52,6 +52,21 @@ let password = cx.new(|cx| {
 
 `InputState` 会发出 `InputEvent::Change`、`PressEnter`、`Focus` 和 `Blur`。订阅事件后读取新值，并在更新宿主状态后调用 `cx.notify()`。
 
+## 光标闪烁
+
+获得焦点的输入框每 500 ms 闪烁一次光标，每次闪烁都会重绘窗口。安装 `CursorBlinkDefaults` 可以为整个应用修改闪烁间隔，传入 `None` 则光标常亮、不再闪烁：
+
+```rust
+use std::time::Duration;
+use gpui_kit::base::input::CursorBlinkDefaults;
+
+CursorBlinkDefaults::new()
+    .with_interval(Duration::from_millis(800))
+    .install(cx);
+```
+
+输入框在每次闪烁时读取该设置，因此已获得焦点的输入框也会立即生效。
+
 ## 表现
 
 `gpui-base` 不安装产品样式。向状态提供 `InputEditorStyle`，并把控件组合进自己的边框容器。若需要现成主题、尺寸、边框、前后缀槽位和清除按钮，请使用 [`gpui-component` Input](../../component/input.md)。
