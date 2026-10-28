@@ -237,7 +237,8 @@ fn descendant_id(window: &mut Window, path: &[ElementId]) -> GlobalElementId {
 }
 
 // Text has no element identity, so each frame records it afresh. Root starts
-// the frame; text inside a cached view is not repainted and is missing.
+// the frame; text inside a cached view, or a view GPUI Fast retains, is not
+// repainted and is missing.
 thread_local! { static TEXTS: RefCell<HashMap<WindowKey, Vec<TextSnapshot>>> = RefCell::new(HashMap::new()); }
 
 fn window_key(window: &Window) -> WindowKey {
