@@ -38,6 +38,7 @@ impl Global for NativeTouchSelection {}
 /// input, keep the handles and menu drawn here.
 pub fn set_native_touch_selection(enabled: bool, cx: &mut App) {
     cx.set_global(NativeTouchSelection(enabled));
+    cx.refresh_windows();
 }
 
 fn is_native_touch_selection(cx: &App) -> bool {

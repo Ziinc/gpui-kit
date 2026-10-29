@@ -4483,6 +4483,10 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         let range = self.selected_range();
         let reversed = if range == previous {
             was_reversed
+        } else if !range.is_empty() && range.end == previous.start {
+            true
+        } else if !range.is_empty() && range.start == previous.end {
+            false
         } else {
             !range.is_empty() && range.start != previous.start && range.end == previous.end
         };
@@ -5986,6 +5990,16 @@ mod tests {
                     // Out of range clamps; a backwards range is normalized.
                     state.set_selected_text_range(100..9, window, cx);
                     assert_eq!(selection(state, window, cx), (9..14, true));
+
+                    // Either handle can cross the stationary end.
+                    state.set_selected_text_range(3..8, window, cx);
+                    state.set_selected_text_range(2..3, window, cx);
+                    assert_eq!(selection(state, window, cx), (2..3, true));
+                    assert_eq!(state.cursor(), 4);
+                    state.set_selected_text_range(3..8, window, cx);
+                    state.set_selected_text_range(8..9, window, cx);
+                    assert_eq!(selection(state, window, cx), (8..9, false));
+                    assert_eq!(state.cursor(), 11);
 
                     // Collapsing places a forward cursor and leaves the text alone.
                     state.set_selected_text_range(2..2, window, cx);
