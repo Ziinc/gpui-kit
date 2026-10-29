@@ -90,4 +90,16 @@ mod tests {
         #[cfg(not(feature = "test-support"))]
         let _: gpui::Stateful<gpui::Div> = element;
     }
+
+    #[test]
+    fn text_observation_keeps_builder_methods() {
+        use gpui::{ParentElement as _, Styled as _};
+
+        let element = div()
+            .test_text("example")
+            .id("target")
+            .text_sm()
+            .child("example");
+        assert_eq!(Element::id(&element), Some("target".into()));
+    }
 }

@@ -636,6 +636,14 @@ impl<E: Element> ObservedText<E> {
             alternative,
         }
     }
+
+    /// Assign an identity to the wrapped element while preserving observation.
+    pub fn id(self, id: impl Into<ElementId>) -> ObservedText<gpui::Stateful<E>>
+    where
+        E: InteractiveElement,
+    {
+        ObservedText::new(self.inner.id(id), self.text, self.alternative)
+    }
 }
 impl<E: Element> IntoElement for ObservedText<E> {
     type Element = Self;
@@ -693,4 +701,38 @@ impl<E: Element> Element for ObservedText<E> {
     fn write_a11y_info(&self, node: &mut gpui::accesskit::Node) {
         self.inner.write_a11y_info(node);
     }
+    fn a11y_synthetic_children(
+        &mut self,
+        prepaint: &mut Self::PrepaintState,
+        builder: &mut gpui::A11ySubtreeBuilder,
+    ) {
+        self.inner.a11y_synthetic_children(prepaint, builder);
+    }
+}
+
+impl<E: Element + gpui::Styled> gpui::Styled for ObservedText<E> {
+    fn style(&mut self) -> &mut gpui::StyleRefinement {
+        self.inner.style()
+    }
+}
+
+impl<E: Element + gpui::ParentElement> gpui::ParentElement for ObservedText<E> {
+    fn extend(&mut self, elements: impl IntoIterator<Item = gpui::AnyElement>) {
+        self.inner.extend(elements);
+    }
+}
+
+impl<E: Element + InteractiveElement> InteractiveElement for ObservedText<E> {
+    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+        self.inner.interactivity()
+    }
+    fn track_focus(mut self, focus: &FocusHandle) -> Self {
+        self.inner = self.inner.track_focus(focus);
+        self
+    }
+}
+
+impl<E: Element + gpui::StatefulInteractiveElement> gpui::StatefulInteractiveElement
+    for ObservedText<E>
+{
 }
